@@ -1,38 +1,58 @@
 #!/bin/bash
 
+# script from ref: https://github.com/siemens/kas/blob/09291011047844f7df024ea13c5322840185d8c5/kas-container
+
 if mount | grep -q "on / type aufs"; then
     cat <<EOF >&2
 WARNING: Generation of wic images will fail!
-
 Your docker host setup uses broken aufs as storage driver. Adjust the docker
-configuration to use a driver (overlay, overlay2, devicemapper). You may also
-need to update the host distribution (e.g. Debian Jessie -> Stretch).
-
+configuration to use a different driver (overlay, overlay2, devicemapper). You
+may also need to update the host distribution (e.g. Debian Jessie -> Stretch).
 EOF
 fi
 
 USER_ID=${USER_ID:-30000}
+GROUP_ID=${GROUP_ID:-30000}
 
-if [ $USER_ID == 0 ]; then
+if [ "$USER_ID" == 0 ]; then
 	# We shall run everything as root
 	mkdir -p /builder
 
-	cd /builder
-	if [ -n "$1" ]; then
-		exec "$@"
-	else
-		exec bash
-	fi
+	GOSU=""
+elif [ "$USER_ID" == "$UID" ]; then
+	GOSU=""
 else
-	if ! id $USER_ID >/dev/null 2>&1; then
+	if ! grep -q "^builder:" /etc/group; then
+		groupadd -o --gid "$GROUP_ID" builder
+	fi
+	if ! id builder >/dev/null 2>&1; then
 		# Create a non-root user that will perform the actual build
-		useradd --uid $USER_ID --create-home --home-dir /builder builder
+		useradd -o --uid "$USER_ID" --gid "$GROUP_ID" --create-home \
+			--home-dir /builder builder
 	fi
 
-	cd /builder
-	if [ -n "$1" ]; then
-		exec gosu builder "$@"
-	else
-		exec gosu builder bash
-	fi
+	GOSU="gosu builder"
+fi
+
+if [ "$PWD" = / ]; then
+	cd /builder || exit 1
+fi
+
+if [ -n "$1" ]; then
+	case "$1" in
+	build|checkout|for-all-repos|menu|shell|-*)
+		# SC2086: Double quote to prevent globbing and word splitting.
+		# shellcheck disable=2086
+		exec $GOSU kas "$@"
+		;;
+	*)
+		# SC2086: Double quote to prevent globbing and word splitting.
+		# shellcheck disable=2086
+		exec $GOSU "$@"
+		;;
+	esac
+else
+	# SC2086: Double quote to prevent globbing and word splitting.
+	# shellcheck disable=2086
+	exec $GOSU bash
 fi
